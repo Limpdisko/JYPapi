@@ -5,7 +5,7 @@ const { User } = require('./niveles'); // Asegúrate de que la ruta sea correcta
 const cartas = {
   "Normal": {
     'JYRB01': {
-      nombre: 'Carta Normal',
+      nombre: 'Carta Rara',
       imagen: 'https://kpopping.com/documents/32/4/800/TWICE-5TH-WORLD-TOUR-READY-TO-BE-in-JAPAN-Concept-Photos-documents-2.jpeg'
     }
   },
