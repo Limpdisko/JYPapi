@@ -3,11 +3,9 @@
 const { EmbedBuilder } = require("discord.js");
 const { MongoClient } = require('mongodb');
 const config = require('../config.json');
-const { addExperience, getExperience, getRankForUser, getVisualLevel, ascendUser, resetUser, selectCard, getSelectedCard, setTrabajo, getTrabajo } = require('./niveles');
-const { getImage } = require('./cartas');
-const { trabajos } = require('./trabajos.js');
-const { User } = require('./niveles');
-
+const { User, addExperience, getExperience, getRankForCard, getVisualLevel, ascendUser, selectCard, getSelectedCard, assignWork, updateWorkUsage, applyWorkExperience, buyCard } = require('./functions.js');
+const { getImage, cards } = require('./cards.js');
+const { works } = require('./works.js');
 
 module.exports = (client, message) => {
   const prefix = `;`;
@@ -18,353 +16,435 @@ module.exports = (client, message) => {
   const command = args.shift().toLowerCase();
   const userId = message.author.id;
 
-  if (command === 'seleccionar') {
-    async function seleccionarCarta() {
-      const cartaCodigo = args[0]; // Aquí usamos el código de la carta
-  
-      if (!cartaCodigo) {
-        return message.channel.send('Por favor, proporciona el código de la carta.');
-      }
-  
-      const cardData = getImage(cartaCodigo);
-  
-      if (!cardData) {
-        return message.channel.send('Carta no encontrada.');
-      }
-  
-      const cardName = cardData.nombre;
-      const cardImage = cardData.imagen;
-  
-      const embed = new EmbedBuilder()
-        .setTitle("Carta Seleccionada")
-        .setDescription(`Has seleccionado la carta: **${cardName}**`);
-  
-      // Verifica que cardImage sea una cadena válida y una URL de imagen
-      if (typeof cardImage === 'string' && cardImage.startsWith('http')) {
-        embed.setImage(cardImage);
-      } else {
-        console.warn('URL de imagen inválida:', cardImage);
-      }
-  
-      message.channel.send({ embeds: [embed] });
-  
-      // Registrar la selección de la carta en la base de datos usando el código de la carta
+
+  if (command === 'start') {
+    (async () => {
       try {
-        await selectCard(message.author.id, cartaCodigo);
-      } catch (error) {
-        console.error('Error al registrar la carta seleccionada:', error);
-        message.channel.send('Hubo un error al intentar registrar la selección de la carta.');
-      }
-    }
+        // Get all card codes from different categories
+        const cardKeys = Object.keys(cards.Normal).concat(
+          Object.keys(cards.Legendary),
+          Object.keys(cards.Rare),
+          Object.keys(cards.Special)
+        );
   
-    seleccionarCarta();
+        // Randomly select a card
+        const randomCardCode = cardKeys[Math.floor(Math.random() * cardKeys.length)];
+  
+        // Check if the user already has a card
+        let user = await User.findOne({ userId: message.author.id });
+  
+        if (user) {
+          if (user.ownedCards.length > 0) {
+            return message.channel.send('You already have a card assigned.');
+          }
+  
+          // Assign the card to the user
+          user.ownedCards.push(randomCardCode);
+          user.selectedCard = randomCardCode;
+          await user.save();
+        } else {
+          // Create a new user and assign the card
+          user = new User({
+            userId: message.author.id,
+            ownedCards: [randomCardCode],
+            selectedCard: randomCardCode
+          });
+          await user.save();
+        }
+  
+        // Get card details
+        const cardData = getImage(randomCardCode);
+  
+        // Create and send embed message
+        const embed = new EmbedBuilder()
+          .setTitle("Card Assigned")
+          .setDescription(`Congratulations! You have been assigned the card **${cardData.name}**.`)
+          .setImage(cardData.image)
+          .setColor("#00FF00"); // Green color for success
+  
+        message.channel.send({ embeds: [embed] });
+  
+      } catch (err) {
+        console.error('Error assigning card:', err);
+        message.channel.send('There was an error trying to assign a card.');
+      }
+    })();
   }
   
 
-  if (command === 'entrenar') {
+  if (command === 'select') {
+    async function selectCardCommand() {
+      const cardCode = args[0]; // Get the card code from the command arguments
+  
+      if (!cardCode) {
+        return message.channel.send('Please provide the card code.');
+      }
+  
+      // Get the card data to verify it exists
+      const cardData = getImage(cardCode);
+  
+      if (!cardData) {
+        return message.channel.send('Card not found.');
+      }
+  
+      // Get the user's data from the database
+      try {
+        const user = await User.findOne({ userId: message.author.id });
+  
+        if (!user) {
+          return message.channel.send('User not found.');
+        }
+  
+        // Check if the user owns the card
+        if (!user.ownedCards.includes(cardCode)) {
+          const embed = new EmbedBuilder()
+            .setTitle("Card Not Found")
+            .setDescription(`You do not own the card with code **${cardCode}**.`)
+            .setColor("#FF0000"); // Red color to indicate an error
+  
+          return message.channel.send({ embeds: [embed] });
+        }
+  
+        // Proceed with selecting the card
+        const cardName = cardData.name;
+        const cardImage = cardData.image;
+  
+        const embed = new EmbedBuilder()
+          .setTitle("Selected Card")
+          .setDescription(`You have selected the card: **${cardName}**`);
+  
+        // Verify that cardImage is a valid string and an image URL
+        if (typeof cardImage === 'string' && cardImage.startsWith('http')) {
+          embed.setImage(cardImage);
+        } else {
+          console.warn('Invalid image URL:', cardImage);
+        }
+  
+        await selectCard(message.author.id, cardCode); // Register the selected card in the database
+  
+        message.channel.send({ embeds: [embed] });
+      } catch (error) {
+        console.error('Error processing card selection:', error);
+        message.channel.send('There was an error trying to select the card.');
+      }
+    }
+  
+    selectCardCommand();
+  }
+  
+  
+
+  if (command === 'train') {
     (async () => {
       try {
         const selectedCardCode = await getSelectedCard(message.author.id);
   
         if (!selectedCardCode) {
-          return message.channel.send('Debes seleccionar una carta antes de entrenar.');
-        }
-  
-        const cardData = getImage(selectedCardCode);
-        if (!cardData) {
-          return message.channel.send('Carta no encontrada.');
-        }
-  
-        const cardImage = cardData.imagen;
-        const cardName = cardData.nombre;
-  
-        if (!cardImage) {
-          return message.channel.send('No se pudo obtener la imagen de la carta.');
-        }
-  
-        let gainedExp = 40;
-        const rand = Math.random();
-        let multiplierMessage = "";
-  
-        if (rand < 0.01) {
-          gainedExp *= 10;
-          multiplierMessage = "¡Increíble! Has recibido un multiplicador de experiencia por 10!";
-        } else if (rand < 0.03) {
-          gainedExp *= 5;
-          multiplierMessage = "¡Asombroso! Has recibido un multiplicador de experiencia por 5!";
-        } else if (rand < 0.06) {
-          gainedExp *= 2;
-          multiplierMessage = "¡Genial! Has recibido un multiplicador de experiencia por 2!";
-        }
-  
-        const newExp = await addExperience(message.author.id, gainedExp);
-        const currentRank = await getRankForUser(message.author.id);
-        const currentLevel = getVisualLevel(newExp, currentRank);
-  
-        const embed = new EmbedBuilder()
-          .setTitle("Entrenamiento")
-          .setDescription(`**${cardName}** ganó **${gainedExp}** puntos de experiencia`)
-          .addFields(
-            { name: 'Experiencia Total', value: `\`${newExp}\``, inline: true },
-            { name: 'Nivel', value: `\`${currentLevel}\``, inline: true },
-            { name: 'Rango', value: `\`${currentRank}\``, inline: true }
-          )
-          .setColor("#FF0000");
-  
-        if (cardImage) {
-          embed.setThumbnail(cardImage);
-        }
-  
-        if (multiplierMessage) {
-          embed.addFields({ name: 'Multiplicador', value: multiplierMessage });
-        }
-  
-        if (Math.random() < 0.50) {
-          const trabajoKeys = Object.keys(trabajos);
-          const randomTrabajo = trabajoKeys[Math.floor(Math.random() * trabajoKeys.length)];
-          const trabajo = trabajos[randomTrabajo];
-          if (trabajo) {
-            const mensajeTrabajo = trabajo.nombre;
-            embed.addFields({ name: 'A agarrar la pala', value: `**${cardName}** ha recibido el siguiente laburo: **${mensajeTrabajo}**.` });
-  
-            await setTrabajo(message.author.id, trabajo.codigo);
-          }
-        }
-  
-        message.channel.send({ embeds: [embed] });
-      } catch (err) {
-        console.error('Error añadiendo experiencia:', err);
-        message.channel.send('Hubo un error al intentar añadir experiencia.');
-      }
-    })();
-  }
-  
-
-  if (command === 'trabajar') {
-    (async () => {
-      try {
-        // Obtener el trabajo actual del usuario
-        const trabajoCodigo = await getTrabajo(userId);
-  
-        if (!trabajoCodigo) {
-          return message.channel.send('No tienes ningún trabajo asignado actualmente.');
-        }
-  
-        const trabajo = trabajos[trabajoCodigo];
-        if (!trabajo) {
-          return message.channel.send('El trabajo asignado no existe.');
-        }
-  
-        // Obtener el usuario desde la base de datos
-        const user = await User.findOne({ userId: userId });
-        if (!user) {
-          return message.channel.send('No se encontró al usuario.');
-        }
-  
-        // Obtener la carta seleccionada y sus datos
-        const selectedCard = await getSelectedCard(userId);
-        if (!selectedCard) {
-          return message.channel.send('Debes seleccionar una carta antes de trabajar.');
-        }
-  
-        const cardData = getImage(selectedCard);
-        const cardName = cardData?.nombre || 'Desconocida'; // Nombre de la carta, con valor por defecto
-        const cardImage = cardData?.imagen; // URL de la imagen
-  
-        // Verificar y decrementar el contador de usos restantes
-        if (user.trabajoUsosRestantes <= 0) {
-          // Si ya no quedan usos, reiniciar el trabajo
-          user.trabajo = null;
-          user.trabajoUsosRestantes = 0;
-          await user.save();
-  
+          // If no card is selected
           const embed = new EmbedBuilder()
-            .setTitle("Trabajo")
-            .setDescription(`El trabajo **${trabajo.nombre}** ha expirado.`)
-            .setColor("#FF0000"); // Color rojo para notificar expiración
-  
-          if (cardImage) {
-            embed.setThumbnail(cardImage); // Agregar el thumbnail de la carta
-          }
+            .setTitle("No Card Selected")
+            .setDescription("You need to select a card before training.")
+            .setColor("#FF0000"); // Red color to indicate an error
   
           return message.channel.send({ embeds: [embed] });
-        } else {
-          // Decrementar el contador de usos restantes
-          user.trabajoUsosRestantes -= 1;
-  
-          // Añadir experiencia
-          const gainedExp = trabajo.experiencia;
-          const newExp = await addExperience(userId, gainedExp);
-  
-          // Actualizar el usuario
-          await user.save();
-  
-          // Obtener la experiencia total, nivel y rango actualizados
-          const currentRank = await getRankForUser(userId);
-          const currentLevel = getVisualLevel(newExp, currentRank);
-  
-          const embed = new EmbedBuilder()
-            .setTitle("Trabajo")
-            .setDescription(`**${trabajo.nombre}**\n**${cardName}** ganó **${gainedExp}** puntos de experiencia`)
-            .addFields(
-              { name: 'Experiencia Total', value: `\`${newExp}\``, inline: true },
-              { name: 'Nivel', value: `\`${currentLevel}\``, inline: true },
-              { name: 'Rango', value: `\`${currentRank}\``, inline: true }
-            )
-            .setColor("#00FF00"); // Color verde para éxito
-  
-          if (cardImage) {
-            embed.setThumbnail(cardImage); // Agregar el thumbnail de la carta
-          }
-
-          // Mover "Usos Restantes" al footer
-        embed.setFooter({ text: `Usos Restantes: ${user.trabajoUsosRestantes}` });
-  
-          // Mostrar mensaje si es el último uso
-          if (user.trabajoUsosRestantes === 0) {
-            embed.addFields({
-              name: 'A descansar',
-              value: `**${cardName}** ha finalizado su trabajo.`,
-            });
-          }
-  
-          message.channel.send({ embeds: [embed] });
         }
   
+        const cardData = getImage(selectedCardCode); // Use getImage to get card details
+        if (!cardData) {
+          return message.channel.send('Card not found.');
+        }
+  
+        const cardName = cardData.name;
+        const cardImageUrl = cardData.image; // URL for the card image
+  
+        // Get the user data
+        const user = await User.findOne({ userId: message.author.id });
+        if (!user) {
+          return message.channel.send('User not found.');
+        }
+  
+        let selectedCard = user.cardData.get(selectedCardCode);
+  
+        // Grant a fixed amount of experience points
+        const experienceGained = 40;
+        selectedCard.experience += experienceGained;
+  
+        // Assign a random work if none is assigned
+        let assignedWorkName = 'None'; // Default if no work is assigned
+        if (!selectedCard.work) {
+          const randomWorkKey = Object.keys(works)[Math.floor(Math.random() * Object.keys(works).length)];
+          const randomWork = works[randomWorkKey];
+  
+          selectedCard.work = randomWork.code;
+          selectedCard.workRemainingUses = randomWork.uses;
+          assignedWorkName = randomWork.name; // Get the name of the assigned work
+        } else {
+          // Get the name of the currently assigned work
+          const work = works[selectedCard.work];
+          assignedWorkName = work ? work.name : 'Unknown'; // Handle cases where work might not be found
+        }
+  
+        // Save the updated user data
+        user.cardData.set(selectedCardCode, selectedCard);
+        await user.save();
+  
+        const totalExperience = selectedCard.experience;
+        const cardRank = await getRankForCard(message.author.id, selectedCardCode);
+        const cardLevel = getVisualLevel(totalExperience, cardRank);
+  
+        const embed = new EmbedBuilder()
+          .setTitle("Training Complete")
+          .setDescription(`**${cardName}** has gained **${experienceGained}** experience points.`)
+          .addFields(
+            { name: 'Total Experience', value: `\`${totalExperience}\``, inline: true },
+            { name: 'Level', value: `\`${cardLevel}\``, inline: true },
+            { name: 'Rank', value: `\`${cardRank}\``, inline: true },
+            { name: 'Assigned Work', value: `${assignedWorkName}`, inline: true } // Add assigned work name to the embed
+          )
+          .setThumbnail(cardImageUrl) // Set the card image as the thumbnail
+          .setColor("#00FF00"); // Green color to indicate success
+  
+        message.channel.send({ embeds: [embed] });
+  
       } catch (err) {
-        console.error('Error al manejar el comando trabajar:', err);
-        message.channel.send('Hubo un error al procesar el comando.');
+        console.error('Error during training:', err);
+        message.channel.send('There was an error processing the training.');
+      }
+    })();
+  }
+
+
+
+  if (command === 'ascend') {
+    (async () => {
+      try {
+        // Get the selected card
+        const selectedCardCode = await getSelectedCard(userId);
+        const cardData = getImage(selectedCardCode);
+        const cardName = cardData ? cardData.name : 'Unknown'; // Get the card name
+        const cardImage = cardData ? cardData.image : null; // Get the card image URL
+
+        // Ascend the user
+        const ascended = await ascendUser(message.author.id);
+        if (ascended) {
+          const currentExp = await getExperience(message.author.id);
+          const currentRank = await getRankForCard(message.author.id);
+          const currentLevel = getVisualLevel(currentExp, currentRank);
+
+          const embed = new EmbedBuilder()
+            .setTitle("Ascension")
+            .setDescription(`Congratulations! **${cardName}** has ascended to the rank \`${currentRank}\``)
+            .addFields(
+              { name: 'Total Experience', value: `\`${currentExp}\``, inline: true },
+              { name: 'Level', value: `\`${currentLevel}\``, inline: true },
+              { name: 'Rank', value: `\`${currentRank}\``, inline: true }
+            )
+            .setColor("#FFD700"); // Gold color for the rank
+
+          if (cardImage) {
+            embed.setThumbnail(cardImage); // Set the card thumbnail
+          }
+
+          message.channel.send({ embeds: [embed] });
+        } else {
+          message.channel.send('You do not meet the requirements to ascend.');
+        }
+      } catch (err) {
+        console.error('Error during ascension:', err);
+        message.channel.send('There was an error trying to ascend.');
+      }
+    })();
+  }
+
+  if (command === 'work') {
+    (async () => {
+      try {
+        const selectedCardCode = await getSelectedCard(message.author.id);
+  
+        if (!selectedCardCode) {
+          // If no card is selected
+          const embed = new EmbedBuilder()
+            .setTitle("No Card Selected")
+            .setDescription("You need to select a card before working.")
+            .setColor("#FF0000"); // Red color to indicate an error
+  
+          return message.channel.send({ embeds: [embed] });
+        }
+  
+        // Get the user data
+        const user = await User.findOne({ userId: message.author.id });
+        if (!user) {
+          return message.channel.send('User not found.');
+        }
+  
+        let selectedCard = user.cardData.get(selectedCardCode);
+  
+        if (!selectedCard.work) {
+          const embed = new EmbedBuilder()
+            .setTitle("No Work Assigned")
+            .setDescription("The selected card does not have any work assigned.")
+            .setColor("#FF0000"); // Red color to indicate an error
+  
+          return message.channel.send({ embeds: [embed] });
+        }
+  
+        const workCode = selectedCard.work;
+        const work = works[workCode];
+  
+        if (!work) {
+          return message.channel.send('Work not found.');
+        }
+  
+        // Get the card details using getImage or similar function
+        const cardData = getImage(selectedCardCode); // Use getImage to get card details
+        if (!cardData) {
+          return message.channel.send('Card not found.');
+        }
+  
+        const cardName = cardData.name;
+        const cardImageUrl = cardData.image; // URL for the card image
+  
+        // Update the experience of the card
+        selectedCard.experience += work.experience;
+        selectedCard.workRemainingUses -= 1;
+  
+        if (selectedCard.workRemainingUses <= 0) {
+          // If no uses remain, remove the work from the card
+          selectedCard.work = null;
+          selectedCard.workRemainingUses = 0;
+        }
+  
+        await user.save(); // Save the updated user data
+  
+        const totalExperience = selectedCard.experience;
+        const cardRank = await getRankForCard(message.author.id, selectedCardCode);
+        const cardLevel = getVisualLevel(totalExperience, cardRank);
+  
+        const embed = new EmbedBuilder()
+          .setTitle("Work Complete")
+          .setDescription(`**${cardName}** has gained **${work.experience}** experience points from the work **${work.name}**.`)
+          .addFields(
+            { name: 'Total Experience', value: `\`${totalExperience}\``, inline: true },
+            { name: 'Level', value: `\`${cardLevel}\``, inline: true },
+            { name: 'Rank', value: `\`${cardRank}\``, inline: true }
+          )
+          .setColor("#00FF00") // Green color to indicate success
+          .setThumbnail(cardImageUrl) // Set the card image as the thumbnail
+          .setFooter({ text: `Remaining Uses: ${selectedCard.workRemainingUses}` }); // Add remaining uses to the footer
+  
+        message.channel.send({ embeds: [embed] });
+  
+      } catch (err) {
+        console.error('Error during work:', err);
+        message.channel.send('There was an error processing the work.');
+      }
+    })();
+  }
+
+ 
+  if (command === 'inbox') {
+    (async () => {
+      try {
+        const userId = message.author.id;
+        const user = await User.findOne({ userId: userId });
+  
+        const embed = new EmbedBuilder()
+          .setTitle("Mailbox")
+          .setColor("#0099ff");
+  
+        if (!user || !user.mailbox || user.mailbox.length === 0) {
+          embed.setDescription("The inbox is empty.");
+        } else {
+          let description = "";
+          user.mailbox.forEach((item, index) => {
+            if (item.type === 'work') {
+              const work = works[item.code];
+              if (work) {
+                description += `${index + 1}. **${work.name}** (work)\n`;
+              }
+            } else {
+              description += `${index + 1}. **${item.name}** (${item.type})\n`;
+            }
+          });
+          description += ("Type `;use 1` to activate an item.");
+          embed.setDescription(description);
+        }
+  
+        message.channel.send({ embeds: [embed] });
+  
+      } catch (err) {
+        console.error('Error handling the mailbox command:', err);
+        message.channel.send('There was an error processing the command.');
       }
     })();
   }
   
 
-if (command === 'ascender') {
-  (async () => {
-    try {
-      // Obtener la carta seleccionada
-      const selectedCardCode = await getSelectedCard(userId);
-      const cardData = getImage(selectedCardCode);
-      const cardName = cardData ? cardData.nombre : 'Desconocida'; // Obtener el nombre de la carta
-      const cardImage = cardData ? cardData.imagen : null; // Obtener la URL de la imagen
 
-      // Ascender al usuario
-      const ascended = await ascendUser(message.author.id);
-      if (ascended) {
-        const currentExp = await getExperience(message.author.id);
-        const currentRank = await getRankForUser(message.author.id);
-        const currentLevel = getVisualLevel(currentExp, currentRank);
 
-        const embed = new EmbedBuilder()
-          .setTitle("Ascenso")
-          .setDescription(`¡Felicidades! **${cardName}** ha ascendido al rango \`${currentRank}\``)
-          .addFields(
-            { name: 'Experiencia Total', value: `\`${currentExp}\``, inline: true },
-            { name: 'Nivel', value: `\`${currentLevel}\``, inline: true },
-            { name: 'Rango', value: `\`${currentRank}\``, inline: true }
-          )
-          .setColor("#FFD700"); // Color dorado para el rango
+  if (command === 'use') {
+    (async () => {
+      try {
+        const index = parseInt(args[0], 10) - 1;
 
-        if (cardImage) {
-          embed.setThumbnail(cardImage); // Establecer el thumbnail de la carta
+        const userId = message.author.id;
+        const user = await User.findOne({ userId: userId });
+
+        if (!user || !user.mailbox || user.mailbox.length <= index || index < 0) {
+          return message.channel.send('Item not found in the mailbox.');
         }
 
+        const item = user.mailbox[index];
+        user.mailbox.splice(index, 1);
+        await user.save();
+
+        if (item.type === 'work') {
+          const selectedCardCode = await getSelectedCard(userId);
+          await setWork(userId, selectedCardCode, item.code, workk[item.code].maxUses);
+          return message.channel.send(`You have activated the work **${item.name}** for the selected card.`);
+        }
+
+        // You can handle other types of items here if needed
+
+      } catch (err) {
+        console.error('Error handling the use command:', err);
+        message.channel.send('There was an error processing the command.');
+      }
+    })();
+  }
+
+
+
+  if (command === 'buy') {
+    (async () => {
+      const cardCode = args[0];
+  
+      if (!cardCode) {
+        return message.channel.send('Please provide the card code.');
+      }
+  
+      // Check if the card exists
+      const cardData = getImage(cardCode);
+      if (!cardData) {
+        return message.channel.send('Card not found.');
+      }
+  
+      // Attempt to buy the card
+      const success = await buyCard(message.author.id, cardCode);
+      if (success) {
+        const embed = new EmbedBuilder()
+          .setTitle("Card Purchased")
+          .setDescription(`You have successfully purchased the card: **${cardData.name}**`)
+          .setImage(cardData.image)
+          .setColor("#00FF00"); // Green color for success
+  
         message.channel.send({ embeds: [embed] });
       } else {
-        message.channel.send('No cumples con los requisitos para ascender.');
-      }
-    } catch (err) {
-      console.error('Error al ascender:', err);
-      message.channel.send('Hubo un error al intentar ascender.');
-    }
-  })();
-}
-  
-  if (command === 'buzon') {
-    (async () => {
-      try {
-        const trabajoCodigo = await getTrabajo(userId);
-        const embed = new EmbedBuilder()
-          .setTitle("Buzón")
-          .setColor("#0099ff");
-
-        if (trabajoCodigo) {
-          const trabajo = trabajos[trabajoCodigo];
-          if (trabajo) {
-            embed.setDescription(`1. **${trabajo.nombre}**\n\nComo ejemplo escribi \`;usar 1\` para activar un item.`);
-          }
-        } else {
-          embed.setDescription("El buzón esta vacío.");
-        }
-
-        message.channel.send({ embeds: [embed] });
-
-      } catch (err) {
-        console.error('Error al manejar el comando buzon:', err);
-        message.channel.send('Hubo un error al procesar el comando.');
-      }
-    })();
-    
-  }
-
-  if (command === 'usar') {
-    (async () => {
-      try {
-        const index = parseInt(args[0], 10);
-  
-        if (isNaN(index)) {
-          return message.channel.send('Por favor, proporciona un número válido para usar el item.');
-        }
-  
-        const trabajoCodigo = await getTrabajo(userId);
-  
-        if (!trabajoCodigo) {
-          return message.channel.send('No tenes ningún item.');
-        }
-  
-        const trabajo = trabajos[trabajoCodigo];
-        if (!trabajo) {
-          return message.channel.send('El item que intentas usar no existe.');
-        }
-  
-        // Aquí activamos el trabajo/item. Dependiendo de la estructura de tu "buzón", podrías necesitar verificar el índice.
-        if (index === 1) { // Si el índice es 1 y tienes solo un item, lo activamos
-          await setTrabajo(userId, trabajo.codigo); // Asigna el trabajo al usuario
-  
-          const embed = new EmbedBuilder()
-            .setTitle("Item Usado")
-            .setDescription(`Has activado el trabajo: **${trabajo.nombre}**`)
-            .setColor("#00FF00");
-  
-          message.channel.send({ embeds: [embed] });
-        } else {
-          message.channel.send('No tienes un item en esa posición.');
-        }
-  
-      } catch (err) {
-        console.error('Error al usar el item:', err);
-        message.channel.send('Hubo un error al intentar usar el item.');
+        message.channel.send('You already own this card or there was an error trying to purchase it.');
       }
     })();
   }
 
-  if (command === 'reset') {
-    (async () => {
-      try {
-        // Ejecutar el reset de la carta seleccionada
-        await resetUser(message.author.id);
-  
-        // Enviar confirmación de reset
-        const embed = new EmbedBuilder()
-          .setTitle("Reset de Carta")
-          .setDescription("Tu carta seleccionada ha sido reseteada.")
-          .setColor("#FF0000");
-  
-        message.channel.send({ embeds: [embed] });
-      } catch (err) {
-        console.error('Error reseteando la carta seleccionada:', err);
-        message.channel.send('Hubo un error al intentar resetear la carta seleccionada.');
-      }
-    })();
-  }
+
+
 };
